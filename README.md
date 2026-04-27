@@ -2,6 +2,8 @@
 
 Image generation nodes for [atlascloud.ai](https://atlascloud.ai), powered by OpenAI's GPT Image 2 models.
 
+![AtlasCloud Nodes](image.png)
+
 ## Features
 
 - **Text to Image** — generate images from text descriptions
