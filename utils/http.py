@@ -1,36 +1,46 @@
-"""HTTP client utilities with retry logic."""
+"""HTTP client utilities for atlascloud.ai API."""
 
-import json
+import base64
 import time
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 
-def create_http_client(timeout: float = 300.0, max_retries: int = 3) -> requests.Session:
-    """
-    Create HTTP client with retry logic.
+def _normalize_base_url(base_url: str) -> str:
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/api/v1"):
+        base_url = base_url[:-7]
+    if base_url.endswith("/api"):
+        base_url = base_url[:-4]
+    return base_url or "https://api.atlascloud.ai"
 
-    Args:
-        timeout: Request timeout in seconds
-        max_retries: Maximum number of retries
 
-    Returns:
-        Configured requests Session
-    """
-    session = requests.Session()
+def _poll_until_done(base_url: str, api_key: str, prediction_id: str, timeout: float) -> dict:
+    """Poll prediction status until completed/succeeded or failed."""
+    poll_url = f"{base_url}/api/v1/model/prediction/{prediction_id}"
 
-    retry_strategy = Retry(
-        total=max_retries,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-    )
+    start_time = time.time()
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            raise Exception(f"Request timed out after {timeout} seconds.")
 
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
+        response = requests.get(poll_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+        result = response.json()
 
-    return session
+        status = result.get("data", {}).get("status", "unknown")
+
+        if status in ("completed", "succeeded"):
+            outputs = result["data"].get("outputs", [])
+            if not outputs:
+                raise Exception("Generation completed but no images returned.")
+            return convert_to_b64_response(outputs)
+
+        elif status == "failed":
+            error_msg = result["data"].get("error") or "Generation failed"
+            raise Exception(f"Generation failed: {error_msg}")
+
+        else:
+            time.sleep(2)
 
 
 def make_api_request(
@@ -39,129 +49,81 @@ def make_api_request(
     payload: dict,
     timeout: float = 300.0,
 ) -> dict:
-    """
-    Make API request to image generation endpoint.
-
-    Args:
-        base_url: API base URL
-        api_key: API key for authentication
-        payload: Request payload
-        timeout: Request timeout in seconds
-
-    Returns:
-        Response JSON
-
-    Raises:
-        Exception: If request fails with error message
-    """
-    client = create_http_client(timeout=timeout)
-
-    url = base_url.rstrip("/") + "/images/generations"
+    """Submit image generation request and poll until done."""
+    base_url = _normalize_base_url(base_url)
+    generate_url = f"{base_url}/api/v1/model/generateImage"
 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
 
-    try:
-        response = client.post(url, headers=headers, json=payload, timeout=timeout)
+    generate_response = requests.post(generate_url, headers=headers, json=payload, timeout=timeout)
 
-        if response.status_code == 401:
-            raise Exception("认证失败：API Key 无效或已过期，请检查您的 API Key")
+    if generate_response.status_code != 200:
+        error_text = generate_response.text or "(empty response)"
+        raise Exception(f"API error ({generate_response.status_code}): {error_text}")
 
-        if response.status_code == 403:
-            raise Exception("访问被拒绝：您的账户可能没有权限或余额不足")
+    generate_result = generate_response.json()
 
-        if response.status_code == 429:
-            raise Exception("请求过于频繁：请稍后重试")
+    if "data" not in generate_result or "id" not in generate_result["data"]:
+        raise Exception(f"Unexpected API response format: {generate_result}")
 
-        if response.status_code >= 500:
-            raise Exception(f"服务器错误 ({response.status_code})：请稍后重试")
+    prediction_id = generate_result["data"]["id"]
 
-        if not response.ok:
-            try:
-                error_data = response.json()
-                error_msg = error_data.get("error", {}).get("message", response.text)
-            except:
-                error_msg = response.text
-            raise Exception(f"API 错误：{error_msg}")
+    return _poll_until_done(base_url, api_key, prediction_id, timeout)
 
-        return response.json()
 
-    except requests.exceptions.Timeout:
-        raise Exception("请求超时：请检查网络连接或增加超时时间")
-    except requests.exceptions.ConnectionError:
-        raise Exception("连接失败：无法连接到 API 服务器，请检查 base_url 是否正确")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"网络请求失败：{str(e)}")
+def convert_to_b64_response(outputs: list) -> dict:
+    """Convert URL outputs to base64 format for ComfyUI."""
+    data_list = []
+
+    for output in outputs:
+        if output.startswith("data:"):
+            # Data URI format: data:image/jpeg;base64,/9j/4AAQ...
+            # Extract base64 part after comma
+            base64_data = output.split(",", 1)[-1]
+            data_list.append({"b64_json": base64_data})
+        elif output.startswith("http"):
+            img_response = requests.get(output, timeout=60)
+            if img_response.ok:
+                img_b64 = base64.b64encode(img_response.content).decode("utf-8")
+                data_list.append({"b64_json": img_b64})
+            else:
+                raise Exception(f"Failed to download image: {output}")
+        else:
+            # Already pure base64
+            data_list.append({"b64_json": output})
+
+    return {"data": data_list}
 
 
 def make_edit_request(
     base_url: str,
     api_key: str,
     payload: dict,
-    images_b64: list,
     timeout: float = 300.0,
 ) -> dict:
-    """
-    Make API request for image editing with reference images.
-
-    Args:
-        base_url: API base URL
-        api_key: API key for authentication
-        payload: Request payload (prompt, size, etc.)
-        images_b64: List of base64 encoded reference images
-        timeout: Request timeout in seconds
-
-    Returns:
-        Response JSON
-    """
-    client = create_http_client(timeout=timeout)
-
-    url = base_url.rstrip("/") + "/images/edits"
+    """Submit image edit request and poll until done."""
+    base_url = _normalize_base_url(base_url)
+    generate_url = f"{base_url}/api/v1/model/generateImage"
 
     headers = {
+        "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
 
-    files = []
-    for i, img_b64 in enumerate(images_b64):
-        img_data = base64.b64decode(img_b64)
-        files.append(("image[]", (f"image_{i}.png", img_data, "image/png")))
+    generate_response = requests.post(generate_url, headers=headers, json=payload, timeout=timeout)
 
-    data = {k: (v if not isinstance(v, (list, dict)) else json.dumps(v)) for k, v in payload.items()}
+    if generate_response.status_code != 200:
+        error_text = generate_response.text or "(empty response)"
+        raise Exception(f"API error ({generate_response.status_code}): {error_text}")
 
-    try:
-        response = client.post(url, headers=headers, data=data, files=files, timeout=timeout)
+    generate_result = generate_response.json()
 
-        if response.status_code == 401:
-            raise Exception("认证失败：API Key 无效或已过期，请检查您的 API Key")
+    if "data" not in generate_result or "id" not in generate_result["data"]:
+        raise Exception(f"Unexpected API response format: {generate_result}")
 
-        if response.status_code == 403:
-            raise Exception("访问被拒绝：您的账户可能没有权限或余额不足")
+    prediction_id = generate_result["data"]["id"]
 
-        if response.status_code == 429:
-            raise Exception("请求过于频繁：请稍后重试")
-
-        if response.status_code >= 500:
-            raise Exception(f"服务器错误 ({response.status_code})：请稍后重试")
-
-        if not response.ok:
-            try:
-                error_data = response.json()
-                error_msg = error_data.get("error", {}).get("message", response.text)
-            except:
-                error_msg = response.text
-            raise Exception(f"API 错误：{error_msg}")
-
-        return response.json()
-
-    except requests.exceptions.Timeout:
-        raise Exception("请求超时：请检查网络连接或增加超时时间")
-    except requests.exceptions.ConnectionError:
-        raise Exception("连接失败：无法连接到 API 服务器，请检查 base_url 是否正确")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"网络请求失败：{str(e)}")
-
-
-import base64
+    return _poll_until_done(base_url, api_key, prediction_id, timeout)

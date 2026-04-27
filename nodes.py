@@ -1,8 +1,8 @@
-"""ComfyUI OneApi nodes for universal image generation API."""
+"""ComfyUI AtlasCloud nodes for atlascloud.ai image generation API."""
 
 import json
 import torch
-from .utils import tensor_to_base64, base64_to_tensor
+from .utils import base64_to_tensor
 from .utils import make_api_request, make_edit_request
 from .utils.image import tensor_batch_to_base64_list
 
@@ -26,14 +26,14 @@ SIZE_OPTIONS = [
 ]
 
 
-class OneApiText2Img:
+class AtlasCloudText2Img:
     """
-    Text-to-image generation node supporting OpenAI gpt-image-2 and compatible APIs.
+    Text-to-image generation node for atlascloud.ai API.
 
-    Supports all gpt-image-2 parameters including quality, background, moderation.
+    Supports gpt-image-2 model with quality, size, and format options.
     """
 
-    CATEGORY = "OneApi"
+    CATEGORY = "AtlasCloud"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "info")
     FUNCTION = "generate"
@@ -44,32 +44,34 @@ class OneApiText2Img:
         return {
             "required": {
                 "base_url": ("STRING", {
-                    "default": "https://api.openai.com/v1",
+                    "default": "https://api.atlascloud.ai",
                     "multiline": False,
+                    "tooltip": "Base URL for the AtlasCloud API endpoint",
                 }),
                 "api_key": ("STRING", {
                     "default": "",
                     "multiline": False,
-                }),
-                "model": ("STRING", {
-                    "default": "gpt-image-2",
+                    "tooltip": "AtlasCloud API key (required)",
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
-                }),
-                "size": (SIZE_OPTIONS, {
-                    "default": "1024x1024",
+                    "tooltip": "Text description of the image to generate",
                 }),
             },
             "optional": {
-                "quality": (["standard", "hd"], {"default": "standard"}),
-                "background": (["opaque", "transparent"], {"default": "opaque"}),
-                "moderation": (["auto", "low"], {"default": "auto"}),
-                "output_format": (["png", "jpeg"], {"default": "png"}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
-                "n": ("INT", {"default": 1, "min": 1, "max": 10}),
-                "extra_params": ("STRING", {"default": "", "multiline": True}),
+                "model": ("STRING", {
+                    "default": "openai/gpt-image-2/text-to-image",
+                    "tooltip": "AI model to use for generation",
+                }),
+                "size": (SIZE_OPTIONS, {
+                    "default": "1024x1024",
+                    "tooltip": "Output image resolution (width x height)",
+                }),
+                "quality": (["low", "medium", "high"], {"default": "medium", "tooltip": "Image quality — higher quality takes longer to generate"}),
+                "output_format": (["jpeg", "png"], {"default": "jpeg", "tooltip": "Output image file format"}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1, "tooltip": "Random seed for reproducibility (-1 = random)"}),
+                "extra_params": ("STRING", {"default": "", "multiline": True, "tooltip": "Additional JSON parameters to merge into the API request body"}),
             },
         }
 
@@ -80,78 +82,46 @@ class OneApiText2Img:
         self,
         base_url: str,
         api_key: str,
-        model: str,
         prompt: str,
-        size: str,
-        quality: str = "standard",
-        background: str = "opaque",
-        moderation: str = "auto",
-        output_format: str = "png",
+        model: str = "openai/gpt-image-2/text-to-image",
+        size: str = "1024x1024",
+        quality: str = "medium",
+        output_format: str = "jpeg",
         seed: int = -1,
-        n: int = 1,
         extra_params: str = "",
     ):
-        """
-        Generate images from text prompt.
-
-        Args:
-            base_url: API base URL
-            api_key: API key for authentication
-            model: Model name (gpt-image-2, dall-e-3, etc.)
-            prompt: Text prompt
-            size: Image size (resolution preset)
-            quality: Image quality (standard/hd)
-            background: Background type (opaque/transparent)
-            moderation: Moderation level (auto/low)
-            output_format: Output format (png/jpeg)
-            seed: Random seed (-1 for random)
-            n: Number of images to generate
-            extra_params: Additional JSON parameters
-
-        Returns:
-            Tuple of (image tensor, info string)
-        """
+        """Generate images from text prompt."""
         if not api_key.strip():
-            raise Exception("API Key 不能为空，请输入有效的 API Key")
+            raise Exception("API Key cannot be empty. Please enter a valid API Key.")
 
         if not prompt.strip():
-            raise Exception("Prompt 不能为空，请输入提示词")
+            raise Exception("Prompt cannot be empty. Please enter a prompt.")
 
-        # Build payload
         payload = {
             "model": model,
             "prompt": prompt,
             "size": size,
             "quality": quality,
-            "background": background,
-            "moderation": moderation,
             "output_format": output_format,
-            "output": "b64_json",
-            "n": n,
+            "enable_base64_output": True,
+            "enable_sync_mode": False,
         }
 
-        # Add seed if specified
         if seed >= 0:
             payload["seed"] = seed
 
-        # Add extra params if provided
         if extra_params.strip():
             try:
                 extra = json.loads(extra_params)
                 if isinstance(extra, dict):
                     payload.update(extra)
             except json.JSONDecodeError:
-                raise Exception("extra_params 格式错误，请提供有效的 JSON 格式")
+                raise Exception("extra_params has invalid format. Please provide valid JSON.")
 
-        # Make API request
-        try:
-            response = make_api_request(base_url, api_key, payload)
-        except Exception as e:
-            raise e
+        response = make_api_request(base_url, api_key, payload)
 
-        # Parse response
         if "data" not in response:
-            raise Exception(f"API 响应格式错误：{response}")
+            raise Exception(f"Unexpected API response format: {response}")
 
         images = []
         for item in response["data"]:
@@ -160,36 +130,34 @@ class OneApiText2Img:
                 images.append(img_tensor)
 
         if not images:
-            raise Exception("API 未返回图像数据")
+            raise Exception("API returned no image data.")
 
-        # Stack all images into batch
         result = torch.cat(images, dim=0)
 
-        # Build info string
         info_data = {
             "model": model,
             "size": size,
             "quality": quality,
-            "n": n,
+            "output_format": output_format,
         }
         if seed >= 0:
             info_data["seed"] = seed
-        if "revised_prompt" in response["data"][0]:
-            info_data["revised_prompt"] = response["data"][0]["revised_prompt"]
 
         info_str = json.dumps(info_data, ensure_ascii=False, indent=2)
 
         return (result, info_str)
 
 
-class OneApiImg2Img:
+class AtlasCloudImg2Img:
     """
-    Image-to-image editing node supporting OpenAI gpt-image-2 and compatible APIs.
+    Image-to-image editing node for atlascloud.ai API.
 
-    Supports multi-reference image input and input_fidelity for detail preservation.
+    Takes up to 3 reference images and transforms them based on text prompt.
+    Use input_fidelity to control detail preservation from the input images.
+    High = preserve faces/logos, Low = more creative freedom.
     """
 
-    CATEGORY = "OneApi"
+    CATEGORY = "AtlasCloud"
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "info")
     FUNCTION = "generate"
@@ -200,34 +168,44 @@ class OneApiImg2Img:
         return {
             "required": {
                 "base_url": ("STRING", {
-                    "default": "https://api.openai.com/v1",
+                    "default": "https://api.atlascloud.ai",
                     "multiline": False,
+                    "tooltip": "Base URL for the AtlasCloud API endpoint",
                 }),
                 "api_key": ("STRING", {
                     "default": "",
                     "multiline": False,
+                    "tooltip": "AtlasCloud API key (required)",
                 }),
-                "model": ("STRING", {
-                    "default": "gpt-image-2",
+                "image_1": ("IMAGE", {
+                    "tooltip": "Primary reference image (required)",
                 }),
                 "prompt": ("STRING", {
                     "multiline": True,
                     "default": "",
-                }),
-                "images": ("IMAGE",),
-                "size": (SIZE_OPTIONS, {
-                    "default": "1024x1024",
+                    "tooltip": "Text description of how to edit the reference image(s)",
                 }),
             },
             "optional": {
-                "input_fidelity": (["high", "low"], {"default": "high"}),
-                "quality": (["standard", "hd"], {"default": "standard"}),
-                "background": (["opaque", "transparent"], {"default": "opaque"}),
-                "moderation": (["auto", "low"], {"default": "auto"}),
-                "output_format": (["png", "jpeg"], {"default": "png"}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
-                "n": ("INT", {"default": 1, "min": 1, "max": 10}),
-                "extra_params": ("STRING", {"default": "", "multiline": True}),
+                "image_2": ("IMAGE", {
+                    "tooltip": "Secondary reference image (optional)",
+                }),
+                "image_3": ("IMAGE", {
+                    "tooltip": "Tertiary reference image (optional)",
+                }),
+                "model": ("STRING", {
+                    "default": "openai/gpt-image-2/edit",
+                    "tooltip": "AI model to use for image editing",
+                }),
+                "size": (SIZE_OPTIONS, {
+                    "default": "1024x1024",
+                    "tooltip": "Output image resolution (width x height)",
+                }),
+                "quality": (["low", "medium", "high"], {"default": "medium", "tooltip": "Image quality — higher quality takes longer to generate"}),
+                "output_format": (["jpeg", "png"], {"default": "jpeg", "tooltip": "Output image file format"}),
+                "input_fidelity": (["high", "low"], {"default": "high", "tooltip": "Detail preservation: high keeps faces/logos intact, low allows more creative freedom"}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1, "tooltip": "Random seed for reproducibility (-1 = random)"}),
+                "extra_params": ("STRING", {"default": "", "multiline": True, "tooltip": "Additional JSON parameters to merge into the API request body"}),
             },
         }
 
@@ -238,66 +216,51 @@ class OneApiImg2Img:
         self,
         base_url: str,
         api_key: str,
-        model: str,
+        image_1: torch.Tensor,
         prompt: str,
-        images: torch.Tensor,
-        size: str,
+        image_2: torch.Tensor = None,
+        image_3: torch.Tensor = None,
+        model: str = "openai/gpt-image-2/edit",
+        size: str = "1024x1024",
+        quality: str = "medium",
+        output_format: str = "jpeg",
         input_fidelity: str = "high",
-        quality: str = "standard",
-        background: str = "opaque",
-        moderation: str = "auto",
-        output_format: str = "png",
         seed: int = -1,
-        n: int = 1,
         extra_params: str = "",
     ):
-        """
-        Edit images with text prompt.
-
-        Args:
-            base_url: API base URL
-            api_key: API key for authentication
-            model: Model name
-            prompt: Text prompt
-            images: Reference images tensor batch
-            size: Output size
-            input_fidelity: Detail preservation level (high/low)
-            quality: Image quality
-            background: Background type
-            moderation: Moderation level
-            output_format: Output format
-            seed: Random seed
-            n: Number of images to generate
-            extra_params: Additional JSON parameters
-
-        Returns:
-            Tuple of (image tensor, info string)
-        """
+        """Edit images with text prompt."""
         if not api_key.strip():
-            raise Exception("API Key 不能为空，请输入有效的 API Key")
+            raise Exception("API Key cannot be empty. Please enter a valid API Key.")
 
         if not prompt.strip():
-            raise Exception("Prompt 不能为空，请输入提示词")
+            raise Exception("Prompt cannot be empty. Please enter a prompt.")
 
-        # Convert images to base64 list
+        images_list = [image_1, image_2, image_3]
+        valid_images = [img for img in images_list if img is not None and img.numel() > 0]
+
+        if not valid_images:
+            raise Exception("At least one reference image is required.")
+
         format_upper = output_format.upper() if output_format != "jpeg" else "JPEG"
-        images_b64 = tensor_batch_to_base64_list(images, format=format_upper)
+        images_uri = []
+        for img in valid_images:
+            b64_list = tensor_batch_to_base64_list(img, format=format_upper)
+            for b64 in b64_list:
+                images_uri.append(f"data:image/{output_format};base64,{b64}")
 
-        if not images_b64:
-            raise Exception("参考图像不能为空，请提供至少一张参考图像")
+        if not images_uri:
+            raise Exception("Failed to convert reference image.")
 
-        # Build payload
         payload = {
             "model": model,
             "prompt": prompt,
+            "images": images_uri,
             "size": size,
-            "input_fidelity": input_fidelity,
             "quality": quality,
-            "background": background,
-            "moderation": moderation,
             "output_format": output_format,
-            "output": "b64_json",
-            "n": n,
+            "input_fidelity": input_fidelity,
+            "enable_base64_output": True,
+            "enable_sync_mode": False,
         }
 
         if seed >= 0:
@@ -309,17 +272,12 @@ class OneApiImg2Img:
                 if isinstance(extra, dict):
                     payload.update(extra)
             except json.JSONDecodeError:
-                raise Exception("extra_params 格式错误，请提供有效的 JSON 格式")
+                raise Exception("extra_params has invalid format. Please provide valid JSON.")
 
-        # Make edit request
-        try:
-            response = make_edit_request(base_url, api_key, payload, images_b64)
-        except Exception as e:
-            raise e
+        response = make_edit_request(base_url, api_key, payload)
 
-        # Parse response
         if "data" not in response:
-            raise Exception(f"API 响应格式错误：{response}")
+            raise Exception(f"Unexpected API response format: {response}")
 
         result_images = []
         for item in response["data"]:
@@ -328,17 +286,17 @@ class OneApiImg2Img:
                 result_images.append(img_tensor)
 
         if not result_images:
-            raise Exception("API 未返回图像数据")
+            raise Exception("API returned no image data.")
 
         result = torch.cat(result_images, dim=0)
 
         info_data = {
             "model": model,
             "size": size,
-            "input_fidelity": input_fidelity,
             "quality": quality,
-            "n": n,
-            "input_images": len(images_b64),
+            "output_format": output_format,
+            "input_fidelity": input_fidelity,
+            "input_images": len(images_uri),
         }
         if seed >= 0:
             info_data["seed"] = seed
@@ -350,12 +308,12 @@ class OneApiImg2Img:
 
 # Node class mappings for registration
 NODE_CLASS_MAPPINGS = {
-    "OneApiText2Img": OneApiText2Img,
-    "OneApiImg2Img": OneApiImg2Img,
+    "AtlasCloudText2Img": AtlasCloudText2Img,
+    "AtlasCloudImg2Img": AtlasCloudImg2Img,
 }
 
 # Display name mappings
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "OneApiText2Img": "OneApi Text to Image",
-    "OneApiImg2Img": "OneApi Image to Image",
+    "AtlasCloudText2Img": "AtlasCloud Text to Image",
+    "AtlasCloudImg2Img": "AtlasCloud Image to Image",
 }

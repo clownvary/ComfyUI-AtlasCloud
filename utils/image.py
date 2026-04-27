@@ -1,4 +1,4 @@
-"""Image conversion utilities for ComfyUI OneApi nodes."""
+"""Image conversion utilities for ComfyUI AtlasCloud nodes."""
 
 import base64
 import io
@@ -51,7 +51,16 @@ def base64_to_tensor(base64_string: str) -> torch.Tensor:
         Tensor of shape (1, H, W, C), values 0-1
     """
     image_data = base64.b64decode(base64_string)
-    pil_image = Image.open(io.BytesIO(image_data)).convert("RGBA")
+    pil_image = Image.open(io.BytesIO(image_data))
+
+    # Convert to RGB (ComfyUI standard format)
+    if pil_image.mode == "RGBA":
+        # Create white background and composite
+        background = Image.new("RGB", pil_image.size, (255, 255, 255))
+        background.paste(pil_image, mask=pil_image.split()[3])
+        pil_image = background
+    elif pil_image.mode != "RGB":
+        pil_image = pil_image.convert("RGB")
 
     arr = np.array(pil_image).astype(np.float32) / 255.0
 

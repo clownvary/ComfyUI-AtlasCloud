@@ -1,20 +1,17 @@
 """
-ComfyUI OneApi - Universal image generation API nodes
-
-Provides two nodes for text-to-image and image-to-image generation
-compatible with OpenAI gpt-image-2 and OpenAI-compatible APIs.
+ComfyUI AtlasCloud - atlascloud.ai image generation API nodes
 """
 
 from .nodes import (
-    OneApiText2Img,
-    OneApiImg2Img,
+    AtlasCloudText2Img,
+    AtlasCloudImg2Img,
     NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS,
 )
 
 __all__ = [
-    "OneApiText2Img",
-    "OneApiImg2Img",
+    "AtlasCloudText2Img",
+    "AtlasCloudImg2Img",
     "NODE_CLASS_MAPPINGS",
     "NODE_DISPLAY_NAME_MAPPINGS",
 ]

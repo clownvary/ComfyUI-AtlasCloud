@@ -1,0 +1,16 @@
+# Auto-normalize line endings
+* text=auto eol=lf
+
+# Python source files
+*.py text diff=python
+
+# Markdown
+*.md text
+
+# JSON
+*.json text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary

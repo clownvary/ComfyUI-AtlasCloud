@@ -1,4 +1,4 @@
-"""Utility modules for ComfyUI OneApi."""
+"""Utility modules for ComfyUI AtlasCloud."""
 
 from .image import tensor_to_base64, base64_to_tensor, tensor_batch_to_base64_list
 from .http import make_api_request, make_edit_request
