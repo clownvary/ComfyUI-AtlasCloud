@@ -1,8 +1,7 @@
 # ComfyUI AtlasCloud
 
-Image generation nodes for [atlascloud.ai](https://atlascloud.ai), powered by OpenAI's GPT Image 2 models.
+Image generation nodes for [atlascloud.ai](https://www.atlascloud.ai?ref=LUGK3T), powered by OpenAI's GPT Image 2 models.
 
-![AtlasCloud Nodes](image.png)
 
 ## Features
 
@@ -11,6 +10,8 @@ Image generation nodes for [atlascloud.ai](https://atlascloud.ai), powered by Op
 - Full support for GPT Image 2 parameters: quality, size, output format, seed
 - Configurable base URL for self-hosted or alternative API endpoints
 - Extra JSON params for advanced/custom API features
+
+![AtlasCloud Nodes](image.png)
 
 ## Requirements
 
